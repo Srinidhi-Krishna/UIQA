@@ -1,0 +1,399 @@
+\documentclass[conference]{IEEEtran}
+\usepackage[T1]{fontenc}
+\usepackage{cite}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{url}
+\usepackage[hidelinks]{hyperref}
+\usepackage{xcolor}
+\newcommand{\todo}[1]{{\color{red}[#1]}}
+
+\setlength{\textfloatsep}{8pt plus 2pt minus 2pt}
+\setlength{\floatsep}{8pt plus 2pt minus 2pt}
+\setlength{\intextsep}{8pt plus 2pt minus 2pt}
+\begin{document}
+\title{Patch-Wise Underwater Image Quality Assessment with a Degradation-Aware Multi-Scale Transformer}
+\author{\IEEEauthorblockN{Cheemakurthi Swetha, KR Srinidhi Rajamane}
+\IEEEauthorblockA{Department of Computer Science and Engineering\\
+Shiv Nadar University Chennai, India\\
+Student IDs: 24011101016, 24011101059\\
+Emails: swetha24110037@snuchennai.edu.in, srinidhirajamane24110033@snuchennai.edu.in}}
+\maketitle
+
+\begin{abstract}
+Underwater images degrade unevenly because of light absorption, scattering, and turbidity, so a single global score hides which regions drive perceived quality. Our objective is no-reference underwater image quality assessment that predicts human mean opinion scores (MOS) and also shows where quality is lost. We evaluate on the UWIQA dataset \todo{and a second dataset}. The proposed network splits each image into patches at three scales and encodes them with a shared ResNet-50 with squeeze-and-excitation. A Transformer models cross-patch context, and a degradation embedding pretrained on synthetic haze, color cast, and blur conditions its tokens through feature-wise linear modulation. Three heads predict patch quality, saliency, and degradation, and fused importance weights drive scale-adaptive pooling. Image-level MOS is the only human supervision; the degradation terms use synthetic levels and handcrafted pseudo-labels. Inference combines a stratified $K$-fold ensemble, flip averaging, and logistic calibration. On the held-out UWIQA test split the calibrated model reaches PLCC 0.8265, SROCC 0.8072, KRCC 0.6668, and RMSE 0.0842, against published values of 0.8156, 0.8104, 0.6661, and 0.0860 for EDANet, which were obtained under a possibly different protocol. Our contribution is a patch-importance-weighted, degradation-conditioned design that outputs interpretable quality maps.
+\newline\noindent\textbf{Code repository:} \url{https://github.com/your-username/your-project}
+\end{abstract}
+\begin{IEEEkeywords}
+Underwater image quality assessment, no-reference, multi-scale Transformer, degradation awareness, UWIQA
+\end{IEEEkeywords}
+
+\section{Introduction}
+
+Underwater imaging supports marine surveys, subsea inspection, and autonomous navigation, yet wavelength-dependent absorption, scattering, and turbidity degrade it unevenly across the frame~\cite{akkaynak2019}. Underwater image quality assessment (UIQA) must therefore predict human mean opinion scores (MOS) without a reference. Handcrafted metrics such as UCIQE~\cite{yang2015uciqe} generalize poorly across water types, while global-regression networks ignore that regions contribute unequally to perceived quality. Patch-based methods~\cite{bosse2018} give local estimates but typically pool uniformly or rely on generic saliency, and image-level MOS provides only weak supervision, akin to multiple-instance learning~\cite{ilse2018}. Transformers capture cross-patch context~\cite{dosovitskiy2021}, but they are not conditioned on underwater degradation. We propose a hybrid UIQA network evaluated on the UWIQA dataset~\cite{yang2021uwiqa}. A ResNet-50 backbone~\cite{he2016resnet} with squeeze-and-excitation (SE) blocks~\cite{hu2018se} encodes patches at three scales with shared weights. A Transformer with scale embeddings models context, and a degradation embedding pretrained on synthetic haze, color cast, and blur conditions its tokens through FiLM~\cite{perez2018film}. Three heads estimate patch quality, saliency, and degradation, and their fused importance weights drive scale-adaptive pooling. Training combines Huber, ranking, PLCC, and degradation pseudo-label losses, and inference uses a stratified $K$-fold ensemble, flip-based test-time augmentation, and logistic calibration. The model outputs patch-level quality, importance, and degradation maps alongside the global score.
+
+\section{Related Works}
+
+\subsection{Underwater Image Quality Assessment}
+
+Because pristine references are rarely available underwater, UIQA is posed as a no-reference problem. UCIQE~\cite{yang2015uciqe} combines the standard deviation of chroma, the contrast of luminance, and the mean saturation. UIQM~\cite{panetta2016uiqm} combines colorfulness, sharpness, and contrast measures inspired by the human visual system. Both are cheap and interpretable, but they use fixed global statistics with hand-set weights, so they miss localized or mixed degradations and generalize poorly across water types. FDUM~\cite{yang2021uwiqa} combines colorfulness, contrast, and sharpness cues and introduced the UWIQA dataset used in this work. NUIQ~\cite{jiang2022nuiq} extracts quality-aware features from chrominance and luminance components and regresses them to a score; EDANet reports being nearly 20 times faster than it. All of these methods score the image as a whole and do not ask which regions drive the perceived quality.
+
+\subsection{Deep NR-IQA}
+
+Kang et al.~\cite{kang2014} trained a CNN on image patches and averaged the patch scores, which assumes every patch contributes equally. WaDIQaM-NR~\cite{bosse2018} learns a weight for each patch and pools the patch scores with those weights. This is the closest precedent for importance-aware pooling, but the weights come from generic natural-image statistics and the patches are processed independently. RankIQA~\cite{liu2017rankiqa} addresses the shortage of labeled data by pretraining on rankings of synthetically distorted images; we use a ranking loss for the same reason. TReS~\cite{golestaneh2022tres} combines CNN features with a transformer and adds relative-ranking and self-consistency losses, so it captures non-local context. These models were designed for natural images and have no mechanism for underwater degradation.
+
+\subsection{EDANet: The Source Paper}
+
+EDANet~\cite{jiang2025eda} is the paper most closely related to our work. It trains a degradation discovery network, DIDNet, on UIEB to predict the residual between a degraded image and its pseudo-reference. The decoder features of DIDNet are fused into a ResNet50-based quality network through a degradation-aware module and pooled globally for scoring. On UWIQA it reports PLCC 0.8156 and SROCC 0.8104, and on SAUD 0.8792 and 0.8517. Its main limits are as follows. Quality is regressed from globally pooled features, so there is no explicit per-patch importance. It uses a single input scale and a CNN backbone, so cross-region context is limited. Its degradation prior depends on enhancement-derived pseudo-references.
+
+\subsection{Positioning of This Work}
+
+\begin{table}[t]
+\centering
+\caption{Capabilities of representative methods. Underw.: underwater-specific; Local: patch-level weighting; Context: cross-patch context; Cue: degradation cue. ``Partial'' marks a related but weaker mechanism.}
+\label{tab:related}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{lcccl}
+\toprule
+Method & Underw. & Local & Context & Cue \\
+\midrule
+UCIQE/UIQM/FDUM/NUIQ & Yes & No & No & Handcrafted \\
+Kang et al. & No & No & No & None \\
+WaDIQaM-NR & No  & Yes & No & None \\
+RankIQA    & No  & No  & No & None \\
+TReS       & No  & No  & Yes & None \\
+EDANet     & Yes & Partial & No & Residual \\
+\textbf{Ours} & Yes & Yes & Yes & Embedding \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:related} summarizes the gap: among the methods reviewed here, none combines patch-level importance weighting, multi-scale context, and an explicit underwater degradation signal. We keep EDANet's idea that a degradation cue helps, but pretrain the cue on synthetic levels (no pseudo-reference) and use it to condition Transformer tokens and weight patches at several scales.
+
+\section{Proposed Methodology}
+\subsection{Problem Formulation and Dataset}
+
+Given an underwater RGB image $\mathbf{I}\in\mathbb{R}^{H\times W\times 3}$ without a pristine reference, the network predicts a global quality score $\hat{Q}\in[0,1]$ that approximates the human MOS. It also returns patch-level maps for quality $q_i$, importance $\alpha_i$, and degradation $\mathbf{r}_i$. Only image-level MOS is available as human supervision, so each image is a bag and its patches are instances~\cite{ilse2018}. The patch maps are latent variables learned by back-propagation, not verified patch-level ground truth.
+
+We use the UWIQA dataset~\cite{yang2021uwiqa}, which provides 890 underwater images with continuous MOS annotations on the $[0,1]$ scale. Fig.~\ref{fig:classes}(a) shows that the UWIQA labels are concentrated around MOS 0.4--0.6, while the classes at 0.8 and above hold only 58 images, so a plain sampler would rarely show the network very good images. Fig.~\ref{fig:mos} confirms the UWIQA label direction: the lowest-MOS images are hazy or strongly green-tinted, and the highest-MOS images are clear with natural color. \todo{Describe the second dataset (SAUD or UIED): source, number of images, annotation type, MOS scale and direction check, split, and class balance (Fig.~\ref{fig:classes}(b)), or delete this sentence if it is not included.}
+
+The split is made at image level before any patch extraction and is stratified by MOS class (width 0.1; classes with too few images are merged into the nearest class so every stratum can be split). With seed 42, a stratified 70/10/20 split is made, and the 20\% part is the fixed test set. The 70\% and 10\% parts are merged into an 80\% pool, which is re-partitioned into $K{=}10$ stratified folds. Each fold model therefore trains on about 72\% of the images, validates on about 8\%, and shares the same test set. The following precautions prevent leakage.
+\begin{itemize}
+\item No image appears in more than one split, which the code asserts, so no patch does either.
+\item The class-balanced sampler and augmentation are applied to the training loader only.
+\item The degradation estimator is pretrained inside each fold on that fold's training images only.
+\item The logistic calibration is fitted on out-of-fold validation predictions only.
+\item The test split is used only to produce the final reported scores.
+\item Near-duplicate image pairs are flagged from thumbnail similarity and inspected manually.
+\end{itemize}
+
+\begin{figure*}[t]
+\centering
+\begin{minipage}[t]{0.44\textwidth}
+\centering
+\includegraphics[width=\linewidth]{Block_dia.png}\\[2pt]
+{\footnotesize (a) Model architecture}
+\end{minipage}\hfill
+\begin{minipage}[t]{0.44\textwidth}
+\centering
+\includegraphics[width=\linewidth]{Block_dia_2.png}\\[2pt]
+{\footnotesize (b) Training, inference, and evaluation pipeline}
+\end{minipage}
+\caption{Proposed method. (a) An image is split into patches at three scales and encoded by a shared ResNet-50 with SE attention. A degradation embedding pretrained on synthetic degradations conditions the Transformer tokens through FiLM. Three heads predict patch quality, saliency, and degradation, and fused importance weights drive scale-adaptive pooling. (b) Stage 1 pretrains the estimator without MOS, stage 2 trains the full model, and inference applies flip averaging and calibration to each fold model before averaging over $K$ models.}
+\label{fig:arch}
+\end{figure*}
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=0.62\textwidth]{class_distribution.png}\\[1pt]
+{\footnotesize (a) UWIQA}\\[4pt]
+\fbox{\parbox{0.62\textwidth}{\centering\vspace{0.5cm}\todo{Insert the class-distribution plot for the second dataset (SAUD / UIED)}\vspace{0.5cm}}}\\[1pt]
+{\footnotesize (b) \todo{SAUD / UIED}}
+\caption{MOS class distribution (class width 0.1). (a) UWIQA. Left: all labelled images by split. Middle: the training set before balancing. Right: images drawn per epoch after class balancing, about 44--45 per class (400 draws per epoch over nine classes). (b) The same three panels for the second dataset \todo{pending; adjust the class counts if they differ}.}
+\label{fig:classes}
+\end{figure*}
+
+\subsection{Processing Pipeline and Approach}
+
+Fig.~\ref{fig:arch}(a) shows the architecture and Fig.~\ref{fig:arch}(b) the training and inference pipeline.
+
+\subsubsection{Preprocessing and multi-scale patches}
+Each image is resized to $256\times256$ and normalized with ImageNet statistics. Non-overlapping patches of size $p_s\in\{32,64,128\}$ are extracted with a vectorized unfold operation (Fig.~\ref{fig:patches}), giving $N_s=(256/p_s)^2$ patches, namely 64, 16, and 4, for $N=84$ tokens per image.
+
+\begin{figure*}[t]
+\centering
+\includegraphics[width=0.55\textwidth]{patch_grids[14].png}
+\caption{Multi-scale patch grids on a resized image: $32\times32$ patches ($N=64$), $64\times64$ patches ($N=16$), and $128\times128$ patches ($N=4$).}
+\label{fig:patches}
+\end{figure*}
+
+\subsubsection{Patch feature extraction}
+One ImageNet-pretrained ResNet-50~\cite{he2016resnet}, shared across all scales, encodes every patch up to its last convolutional stage. Patches are fed at their native size and are not resized, so a $32\times32$ patch gives a $1\times1$ final feature map. An SE block~\cite{hu2018se} reweights channels with a gate $2\sigma(\cdot)$ whose last layer is zero-initialized, so it starts as an identity and does not disturb the pretrained features. Global average pooling gives a 2048-d vector, which a linear layer and layer normalization map to $\mathbf{f}_i^{(s)}\in\mathbb{R}^{d}$ with $d=256$.
+
+\subsubsection{Degradation estimator and FiLM conditioning}
+A small CNN $E(\cdot)$ of four stride-2 convolution blocks with group normalization maps the whole image to an embedding $\mathbf{z}\in\mathbb{R}^{128}$ and to three levels $\hat{\boldsymbol{\ell}}\in[0,1]^3$ for haze, color cast, and blur. These three are used because they can be synthesized with a controllable, known level, which gives exact regression targets without any pseudo-reference. In stage 1 it is pretrained to regress the known levels $\boldsymbol{\ell}$ of synthetic degradations, drawn uniformly in $[0,1]$ and applied to training images, with the mean squared error
+\begin{equation}
+\mathcal{L}_{\text{pre}}=\tfrac{1}{3}\lVert \hat{\boldsymbol{\ell}}-\boldsymbol{\ell}\rVert_2^2 .
+\end{equation}
+Color cast attenuates red most strongly, haze blends the image toward a blue-green airlight, and blur is a Gaussian filter (up to $\sigma=2.5$ px). This stage uses no MOS and no pseudo-reference. In stage 2, $\mathbf{z}$ conditions every token through FiLM~\cite{perez2018film}:
+\begin{equation}
+[\boldsymbol{\gamma},\boldsymbol{\beta}]=\mathbf{W}_f\mathbf{z},\qquad
+\mathbf{x}_i\leftarrow \mathbf{x}_i\odot(1+\boldsymbol{\gamma})+\boldsymbol{\beta},
+\end{equation}
+where $\mathbf{W}_f$ is zero-initialized, so training starts from the unconditioned model. The estimator is then fine-tuned with the rest of the network. The patch-level degradation head described below uses five attributes, a different and finer set: it adds contrast and noise, for which we do not synthesize known levels.
+
+\subsubsection{Cross-patch, cross-scale Transformer}
+The input token is $\mathbf{x}_i=\mathbf{f}_i^{(s)}+\mathbf{e}_s+\mathbf{p}_i$, with a learnable scale embedding $\mathbf{e}_s$ and a position embedding $\mathbf{p}_i$ for each token position within a scale. After FiLM, all $N$ tokens pass through $L=4$ pre-norm encoder layers~\cite{dosovitskiy2021} with 8 heads, and
+\begin{equation}
+\mathbf{X}'=\mathrm{softmax}\!\left(\frac{\mathbf{Q}\mathbf{K}^{\top}}{\sqrt{d}}\right)\mathbf{V},
+\end{equation}
+so each patch is contextualized by every other patch at every scale. The output is $\mathbf{h}_i\in\mathbb{R}^{d}$.
+
+\subsubsection{Three-branch head and importance fusion}
+Three two-layer MLP branches act on each $\mathbf{h}_i$:
+\begin{equation}
+q_i=\sigma(g_q(\mathbf{h}_i)),\quad s_i=\sigma(g_s(\mathbf{h}_i)),\quad \mathbf{r}_i=\sigma(g_r(\mathbf{h}_i)),
+\end{equation}
+where $\mathbf{r}_i\in[0,1]^5$ covers color, haze, blur, contrast, and noise. These are summarized as $d_i=\sum_k \beta_k r_{ik}$ with $\boldsymbol{\beta}=\mathrm{softmax}(\mathbf{b})$ learned. Importance is computed from the token and the branch outputs and normalized within each scale:
+\begin{equation}
+e_i=\mathrm{MLP}([\mathbf{h}_i;q_i;s_i;d_i]),\qquad
+\alpha_i^{(s)}=\frac{\exp e_i}{\sum_{j\in\mathcal{P}_s}\exp e_j}.
+\end{equation}
+This replaces the uniform pooling of~\cite{kang2014} and the generic weights of~\cite{bosse2018}.
+
+\subsubsection{Scale-adaptive pooling}
+Each scale is pooled as $Q^{(s)}=\sum_{i\in\mathcal{P}_s}\alpha_i^{(s)}q_i$. The scale weights combine a learned global bias with a per-image term, and the score is
+\begin{equation}
+\lambda_s=\mathrm{softmax}_s\!\big(b_s+\mathbf{w}^{\top}\bar{\mathbf{h}}^{(s)}\big),\qquad
+\hat{Q}=\sum_{s}\lambda_s Q^{(s)},
+\end{equation}
+where $\bar{\mathbf{h}}^{(s)}$ is the mean token of scale $s$ and $\mathbf{w}$ (shared across scales) is zero-initialized, so training starts from equal scale weights.
+
+\subsubsection{Training objective and procedure}
+Training minimizes
+\begin{equation}
+\mathcal{L}=\lambda_{1}\mathcal{L}_{\text{MOS}}+\lambda_{2}\mathcal{L}_{\text{rank}}+\lambda_{3}\mathcal{L}_{\text{PLCC}}+\lambda_{4}\mathcal{L}_{\text{deg}}.
+\end{equation}
+$\mathcal{L}_{\text{MOS}}$ is a Huber loss ($\delta=0.1$) whose per-sample weights grow with the distance of the label from the batch mean ($\gamma=0.5$, weights normalized to mean one), so extreme-quality images count more. $\mathcal{L}_{\text{rank}}=\max(0,m-(\hat{y}_a-\hat{y}_b))$ is a margin loss averaged over batch pairs with $y_a>y_b$, motivated by RankIQA~\cite{liu2017rankiqa}. $\mathcal{L}_{\text{PLCC}}=1-r(\hat{\mathbf{y}},\mathbf{y})$ is computed per batch and optimizes the evaluation correlation directly. $\mathcal{L}_{\text{deg}}$ is the mean squared error between $\mathbf{r}_i$ and handcrafted per-patch pseudo-labels (color-cast deviation, dark-channel haze, inverse Laplacian variance for blur, low contrast, high-frequency noise energy). These are not human annotations. The training loader draws MOS classes in a class-balanced way (Fig.~\ref{fig:classes}) with label-preserving augmentation: flips, 90$^\circ$ rotations, mild brightness and contrast jitter, and square crops covering at least 90\% of the image area. Hue, saturation, and blur changes are excluded because they alter quality. The backbone is frozen for the first 20 epochs and then fine-tuned at 0.2 times the base learning rate.
+
+\subsubsection{Inference and calibration}
+At test time, each fold model's prediction is averaged over four flip views (identity, horizontal, vertical, both). A five-parameter logistic mapping of the VQEG type,
+\begin{equation}
+Q_{\text{fit}}(x)=\beta_1\!\left(\tfrac12-\tfrac{1}{1+e^{\beta_2(x-\beta_3)}}\right)+\beta_4x+\beta_5,
+\end{equation}
+is fitted by unconstrained least squares on out-of-fold validation predictions with 12 random restarts, keeping the restart with the lowest squared error on the fit data. Monotonicity is not enforced in the fit. We report two scores. The \emph{raw} score is the mean over the $K$ fold models of their flip-averaged outputs, with no mapping. The \emph{calibrated} score applies the mapping to each fold model's flip-averaged output and then averages over the $K$ models, as in Fig.~\ref{fig:arch}(b).
+
+\subsubsection{Modifications relative to EDANet}
+Relative to EDANet~\cite{jiang2025eda}, (i) the degradation prior is pretrained on synthetic levels instead of enhancement-derived pseudo-references, (ii) it conditions Transformer tokens through FiLM instead of fusing decoder features, (iii) quality is aggregated with learned patch and scale importance instead of global pooling, and (iv) the input is multi-scale with Transformer context. The components themselves (ResNet, SE, Transformer, FiLM, and the loss terms) are existing techniques, and our contribution is their combination for underwater quality prediction. The synthetic-level pretext task differs from EDANet's and has not been validated against it.
+
+\subsection{Implementation Details}
+
+The code uses PyTorch and torchvision (\todo{versions}), SciPy, and scikit-learn, and ran on a single NVIDIA T4 GPU (Google Colab) with mixed precision. Table~\ref{tab:hparams} lists the main settings. Validation and checkpoints use exponential-moving-average weights, and the best epoch per fold is chosen by validation SROCC. One iteration is a full run on one fold that trains until the patience is exhausted.
+
+\begin{table}[t]
+\centering
+\caption{Main hyperparameters.}
+\label{tab:hparams}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{p{0.40\columnwidth}p{0.52\columnwidth}}
+\toprule
+Item & Value \\
+\midrule
+Input / patch sizes & $256^2$ / 32, 64, 128 (native size) \\
+Embedding dim. $d$ / FiLM dim. & 256 / 128 \\
+Transformer & 4 layers, 8 heads, FF 512, dropout 0.4 \\
+Optimizer & AdamW, lr $3\!\times\!10^{-5}$, weight decay $10^{-3}$ \\
+Schedule & Cosine with warm restarts ($T_0{=}50$, $T_{\text{mult}}{=}2$, floor $3\!\times\!10^{-7}$) \\
+Backbone & frozen 20 epochs, then lr $\times0.2$ \\
+Batch size / batches per epoch & 16 / 25 \\
+Max epochs / early stop & 200 / patience 30 on val SROCC, counted from backbone unfreezing \\
+EMA decay / gradient clip & 0.995 / 1.0 \\
+Huber $\delta$ / margin $m$ / $\gamma$ & 0.1 / 0.05 / 0.5 \\
+Loss weights $\lambda_{1..4}$ & 1.0, 0.5, 0.5, 0.1 \\
+Estimator pretraining & 8 epochs $\times$ 100 iters, lr $3\!\times\!10^{-4}$ \\
+Test split / folds $K$ & 20\% held out / 10 on the 80\% pool \\
+Seed & 42 (split and folds fixed) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Results and Discussion}
+\subsection{Experimental Setup and Evaluation}
+
+We report four metrics between predictions $\hat{y}$ and MOS $y$. PLCC measures linear correlation, SROCC and KRCC measure rank agreement, and RMSE measures absolute error on the MOS scale. Validation scores are used only for early stopping and calibration. Final numbers are on the held-out 20\% test split of each dataset (179 UWIQA images), using the $K$-fold ensemble with flip averaging, and we report both the raw and calibrated scores defined in Section~III-B.
+
+The baseline numbers are those published for EDANet~\cite{jiang2025eda}. Its split ratio, resize, and crop are not documented in its public code, so our protocol is not guaranteed to match it and the comparison is indicative only.
+
+\subsection{Quantitative and Qualitative Results}
+
+\begin{table}[t]
+\centering
+\caption{Test results. EDANet values are as published under its own protocol. Bold marks the best value per metric on each dataset. $\Delta$ is calibrated minus EDANet.}
+\label{tab:results}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{>{\raggedright\arraybackslash}p{0.34\columnwidth}cccc}
+\toprule
+Method & PLCC$\uparrow$ & SROCC$\uparrow$ & KRCC$\uparrow$ & RMSE$\downarrow$ \\
+\midrule
+\multicolumn{5}{l}{\emph{UWIQA}} \\
+EDANet~\cite{jiang2025eda} & 0.8156 & \textbf{0.8104} & 0.6661 & 0.0860 \\
+Ours (raw) & 0.8248 & 0.8072 & 0.6666 & 0.0867 \\
+Ours (calibrated) & \textbf{0.8265} & 0.8072 & \textbf{0.6668} & \textbf{0.0842} \\
+$\Delta$ vs.\ EDANet & +0.0109 & $-$0.0032 & +0.0007 & $-$0.0018 \\
+\midrule
+\multicolumn{5}{l}{\emph{\todo{SAUD / UIED}}} \\
+EDANet~\cite{jiang2025eda} & \todo{--} & \todo{--} & \todo{--} & \todo{--} \\
+Ours (raw) & \todo{--} & \todo{--} & \todo{--} & \todo{--} \\
+Ours (calibrated) & \todo{--} & \todo{--} & \todo{--} & \todo{--} \\
+$\Delta$ vs.\ EDANet & \todo{--} & \todo{--} & \todo{--} & \todo{--} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:results} gives the main comparison. On UWIQA the calibrated model has the highest PLCC (0.8265), highest KRCC (0.6668), and lowest RMSE (0.0842) among the completed rows, while EDANet keeps the highest SROCC (0.8104). The PLCC gain is 0.0109, and the RMSE is 2.1\% lower than EDANet's. The KRCC gain of 0.0007 is negligible, and SROCC is 0.0032 below EDANet. \todo{Add one sentence on the second dataset once its numbers are in.}
+
+\begin{table}[t]
+\centering
+\caption{Planned ablations (all runs pending), reported on out-of-fold validation predictions, not the test split. M0--M7 follow the architecture ladder; the other rows remove one component of the full model.}
+\label{tab:ablation}
+\scriptsize\renewcommand{\arraystretch}{0.92}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{cp{0.56\columnwidth}cc}
+\toprule
+ID & Configuration & PLCC & SROCC \\
+\midrule
+M0 & Global CNN, no patches & \todo{--} & \todo{--} \\
+M1 & Patch CNN, average pooling & \todo{--} & \todo{--} \\
+M2 & + attention pooling & \todo{--} & \todo{--} \\
+M3 & + saliency pooling & \todo{--} & \todo{--} \\
+M4 & + saliency and degr. pooling & \todo{--} & \todo{--} \\
+M5 & Multi-scale, no Transformer & \todo{--} & \todo{--} \\
+M6 & Multi-scale + Transformer, no degr. & \todo{--} & \todo{--} \\
+M7 & Full model & \todo{--} & \todo{--} \\
+\midrule
+S1 & Single scale (64$\times$64 only) & \todo{--} & \todo{--} \\
+F1 & No FiLM conditioning & \todo{--} & \todo{--} \\
+F2 & No estimator pretraining & \todo{--} & \todo{--} \\
+L1 & No degradation loss & \todo{--} & \todo{--} \\
+L2 & No ranking loss & \todo{--} & \todo{--} \\
+L3 & No PLCC loss & \todo{--} & \todo{--} \\
+L4 & MSE instead of Huber loss & \todo{--} & \todo{--} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:ablation} lists the planned ablations. They isolate pooling (M1--M4), scale (S1, M5), the Transformer (M5, M6), the degradation branch (M6, M7, F1, F2, L1), and the loss terms (L2--L4), all under the same split, seed, and protocol as the full model. Fig.~\ref{fig:maps} will show predicted patch maps for both datasets.
+
+\begin{figure*}[t]
+\centering
+\begin{minipage}[t]{0.48\textwidth}
+\centering
+\fbox{\parbox{0.92\linewidth}{\centering\vspace{0.9cm}\todo{Insert UWIQA examples with predicted quality $q_i$, importance $\alpha_i$, and degradation $\mathbf{r}_i$ maps, and a predicted vs.\ true MOS scatter}\vspace{0.9cm}}}\\[2pt]
+{\footnotesize (a) UWIQA}
+\end{minipage}\hfill
+\begin{minipage}[t]{0.48\textwidth}
+\centering
+\fbox{\parbox{0.92\linewidth}{\centering\vspace{0.9cm}\todo{Insert second-dataset (SAUD / UIED) examples with the same maps and scatter}\vspace{0.9cm}}}\\[2pt]
+{\footnotesize (b) \todo{SAUD / UIED}}
+\end{minipage}
+\caption{Qualitative outputs: predicted quality, importance, and degradation maps with the predicted-vs.-true MOS scatter for (a) UWIQA and (b) the second dataset (pending).}
+\label{fig:maps}
+\end{figure*}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.7\columnwidth]{mos_direction_check.png}
+\caption{MOS direction check on UWIQA. Top: lowest-MOS images (0.20), hazy or color-cast. Bottom: highest-MOS images (1.00), clear with natural color. Higher MOS means better quality.}
+\label{fig:mos}
+\end{figure}
+
+\subsection{Discussion and Limitations}
+
+Calibration mainly reduces error. Moving from the raw to the calibrated score lowers RMSE from 0.0867 to 0.0842 and raises PLCC from 0.8248 to 0.8265, while SROCC (0.8072 in both cases) and KRCC (0.6666 to 0.6668) are essentially unchanged. This is expected, because the fitted mapping rescales the scores to the MOS range and is close to monotonic, so it barely changes their order. The raw score alone is already above EDANet's published values in PLCC and KRCC, so those gains are not solely an effect of the mapping, but its RMSE (0.0867) is slightly worse than EDANet's (0.0860).
+
+Against EDANet, the pattern is mixed. A higher PLCC with a lower RMSE means our predictions follow the MOS values more closely, but the lower SROCC means the overall ordering of images is marginally less consistent, so ranking quality is the metric to improve. These differences are small (at most 0.011), and the protocols may differ, so we describe the model as competitive with EDANet and do not claim it is better. The ablations in Table~\ref{tab:ablation} are needed before attributing any gain to a specific component. \todo{Add representative success and failure cases from the test-set error audit, or remove this sentence.}
+
+The following limitations apply regardless of the final scores.
+\begin{itemize}
+\item There are no patch-level MOS labels, so the quality, importance, and degradation maps are model attributions, not physical measurements of absorption or turbidity.
+\item The degradation branch is supervised by handcrafted pseudo-labels, and the estimator uses a synthetic pretext task that differs from EDANet's, so neither has been validated against human judgments.
+\item The backbone is pretrained on terrestrial ImageNet images, which leaves a domain gap with underwater color statistics.
+\item A $32\times32$ patch gives a $1\times1$ ResNet-50 feature map, so the finest scale carries little spatial structure.
+\item UWIQA labels concentrate mid-range (Fig.~\ref{fig:classes}(a)), and the top classes have few images, so scores for excellent images may be less reliable.
+\item The reported scores come from one trained ensemble (one training seed) and have no confidence interval, so we cannot separate the small differences from EDANet from variation across training seeds or test samples.
+\end{itemize}
+
+\section{Conclusion and Future Work}
+
+We presented a degradation-aware, multi-scale Transformer for underwater image quality assessment that learns patch quality and importance from image-level MOS alone as human supervision and returns interpretable maps with the global score. On UWIQA the calibrated model reaches PLCC 0.8265, SROCC 0.8072, KRCC 0.6668, and RMSE 0.0842, which is higher in PLCC and lower in RMSE than the published EDANet values and slightly lower in SROCC, under protocols that may differ. \todo{Add the finding on the second dataset.} Because the maps are latent attributions and the degradation supervision is synthetic or handcrafted, conclusions about where quality is lost need human validation. Next steps are (i) running the ablations over several seeds to estimate variance, and (ii) improving ranking consistency, including overlapping patches to reduce boundary effects.
+
+\begin{thebibliography}{10}
+
+\bibitem{akkaynak2019}
+D. Akkaynak and T. Treibitz, ``Sea-thru: A method for removing water from underwater images,''
+in \emph{Proc. IEEE/CVF Conf. Comput. Vis. Pattern Recognit. (CVPR)}, 2019, pp. 1682--1691.
+
+\bibitem{yang2015uciqe}
+M. Yang and A. Sowmya, ``An underwater color image quality evaluation metric,''
+\emph{IEEE Trans. Image Process.}, vol. 24, no. 12, pp. 6062--6071, 2015.
+
+\bibitem{bosse2018}
+S. Bosse, D. Maniry, K.-R. M\"uller, T. Wiegand, and W. Samek, ``Deep neural networks for no-reference and full-reference image quality assessment,''
+\emph{IEEE Trans. Image Process.}, vol. 27, no. 1, pp. 206--219, 2018.
+
+\bibitem{ilse2018}
+M. Ilse, J. Tomczak, and M. Welling, ``Attention-based deep multiple instance learning,''
+in \emph{Proc. Int. Conf. Mach. Learn. (ICML)}, 2018, pp. 2127--2136.
+
+\bibitem{dosovitskiy2021}
+A. Dosovitskiy \emph{et al.}, ``An image is worth 16$\times$16 words: Transformers for image recognition at scale,''
+in \emph{Proc. Int. Conf. Learn. Represent. (ICLR)}, 2021.
+
+\bibitem{yang2021uwiqa}
+N. Yang, Q. Zhong, K. Li, R. Cong, Y. Zhao, and S. Kwong, ``A reference-free underwater image quality assessment metric in frequency domain,''
+\emph{Signal Process.: Image Commun.}, vol. 94, Art. no. 116218, 2021.
+
+\bibitem{he2016resnet}
+K. He, X. Zhang, S. Ren, and J. Sun, ``Deep residual learning for image recognition,''
+in \emph{Proc. IEEE Conf. Comput. Vis. Pattern Recognit. (CVPR)}, 2016, pp. 770--778.
+
+\bibitem{hu2018se}
+J. Hu, L. Shen, and G. Sun, ``Squeeze-and-excitation networks,''
+in \emph{Proc. IEEE/CVF Conf. Comput. Vis. Pattern Recognit. (CVPR)}, 2018, pp. 7132--7141.
+
+\bibitem{perez2018film}
+E. Perez, F. Strub, H. de Vries, V. Dumoulin, and A. Courville, ``FiLM: Visual reasoning with a general conditioning layer,''
+in \emph{Proc. AAAI Conf. Artif. Intell.}, 2018.
+
+\bibitem{jiang2025eda}
+Q. Jiang, Y. Gu, Z. Wu, C. Li, H. Xiong, F. Shao, and Z. Wang, ``Deep underwater image quality assessment with explicit degradation awareness embedding,''
+\emph{IEEE Trans. Image Process.}, vol. 34, pp. 1297--1311, 2025.
+
+\bibitem{panetta2016uiqm}
+K. Panetta, C. Gao, and S. Agaian, ``Human-visual-system-inspired underwater image quality measures,''
+\emph{IEEE J. Ocean. Eng.}, vol. 41, no. 3, pp. 541--551, 2016.
+
+\bibitem{jiang2022nuiq}
+Q. Jiang, Y. Gu, C. Li, R. Cong, and F. Shao, ``Underwater image enhancement quality evaluation: Benchmark dataset and objective metric,''
+\emph{IEEE Trans. Circuits Syst. Video Technol.}, vol. 32, no. 9, pp. 5959--5974, 2022.
+
+\bibitem{kang2014}
+L. Kang, P. Ye, Y. Li, and D. Doermann, ``Convolutional neural networks for no-reference image quality assessment,''
+in \emph{Proc. IEEE Conf. Comput. Vis. Pattern Recognit. (CVPR)}, 2014, pp. 1733--1740.
+
+\bibitem{liu2017rankiqa}
+X. Liu, J. van de Weijer, and A. D. Bagdanov, ``RankIQA: Learning from rankings for no-reference image quality assessment,''
+in \emph{Proc. IEEE Int. Conf. Comput. Vis. (ICCV)}, 2017, pp. 1040--1049.
+
+\bibitem{golestaneh2022tres}
+S. A. Golestaneh, S. Dadsetan, and K. M. Kitani, ``No-reference image quality assessment via transformers, relative ranking, and self-consistency,''
+in \emph{Proc. IEEE/CVF Winter Conf. Appl. Comput. Vis. (WACV)}, 2022, pp. 1220--1230.
+
+\end{thebibliography}
+
+\end{document}

@@ -1,0 +1,15 @@
+# Unpinned on purpose; after a successful run, pin with:  pip freeze > requirements-lock.txt
+torch
+torchvision
+timm
+numpy
+pandas
+scipy
+scikit-learn
+matplotlib
+seaborn
+pillow
+tqdm
+openpyxl
+jupyter
+ipykernel
