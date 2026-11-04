@@ -34,9 +34,9 @@ Competitive with EDANet: higher PLCC and KRCC and lower RMSE, slightly lower SRO
 
 | Method | PLCC | SROCC | KRCC | RMSE (normalised 0-1 scale) |
 |---|---|---|---|---|
-| EDANet (as published) | 0.8792 | 0.8517 | 0.7459 | 9.3911 (original MOS units, not comparable) |
-| Ours (raw) | 0.7638 | 0.7498 | 0.5594 | 0.1162 |
-| Ours (calibrated) | 0.7733 | 0.7499 | 0.5595 | 0.1144 |
+| EDANet (as published) | 0.8792 | 0.8517 | 0.7459 | 9.3911  |
+| Ours (raw) | 0.7638 | 0.7498 | 0.5594 | 11.62 |
+| Ours (calibrated) | 0.7733 | 0.7499 | 0.5595 | 11.44 |
 
 On SAUD the model is clearly below EDANet's published numbers (about 0.10 lower in PLCC and SROCC, 0.19 lower in KRCC).
 
