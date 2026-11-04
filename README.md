@@ -1,4 +1,4 @@
-# Patch-Wise Underwater Image Quality Assessment with a Degradation-Aware Multi-Scale Transformer
+# Underwater Image Quality Assessment with a Degradation-Aware Multi-Scale Transformer
 
 No-reference underwater image quality assessment (UIQA) that predicts the human mean opinion score (MOS) **and** shows which regions drive the score. Evaluated on **UWIQA** and **SAUD**.
 
